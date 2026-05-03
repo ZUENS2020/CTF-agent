@@ -3,11 +3,15 @@
   "version": "0.1.0",
   "description": "Structured local control plane for Codex-driven CTF workflows.",
   "type": "module",
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "bin": {
     "ctfctl": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "rm -rf dist && tsc -p tsconfig.json",
     "test": "vitest",
     "test:run": "vitest run"
   },
