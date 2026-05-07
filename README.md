@@ -1,6 +1,6 @@
 # ctfctl
 
-`ctfctl` 是一个给 Codex 使用的本地 CTF 控制面 CLI。它的目标不是做终端美化，而是提供稳定、结构化、可审计的命令协议，让 Codex 能在受控环境里创建题目、管理工作区、执行命令、登记证据、管理 artifact，并使用带 `branch / commit / merge` 语义的 gccmem。
+`ctfctl` 是一个给 Codex 使用的本地 CTF 控制面 CLI。它的目标是提供稳定、结构化、可审计的命令协议，让 Codex 能在受控环境里创建题目、管理工作区、执行命令、登记证据、管理 artifact，并使用带 `branch / commit / merge` 语义的 gccmem。
 
 如果你想一眼看懂整个项目，先看 [项目总览](</Users/zuens2020/Documents/CTF-agent/docs/项目总览.md>)。
 
