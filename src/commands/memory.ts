@@ -70,9 +70,20 @@ export function registerMemoryCommands(program: Command, context: CommandContext
       });
     });
 
-  memory.command("recall").requiredOption("--query <query>").action(async (options) => {
+  memory
+    .command("recall")
+    .requiredOption("--query <query>")
+    .option("--challenge <challengeId>")
+    .option("--branch <branchId>")
+    .option("--status <status>")
+    .action(async (options) => {
       context.setCommand("memory recall");
-      const matches = await recallMemoryCommits(context.paths, options.query);
+      const matches = await recallMemoryCommits(context.paths, {
+        query: options.query,
+        challengeId: options.challenge,
+        branchId: options.branch,
+        status: options.status
+      });
       context.writeSuccess({
         matches
       });
