@@ -447,9 +447,14 @@ export async function listArtifactsByChallenge(paths: RuntimePaths, challengeId:
 
 export async function recallMemoryCommits(
   paths: RuntimePaths,
-  query: string
+  input: {
+    query: string;
+    challengeId?: string;
+    branchId?: string;
+    status?: MemoryBranchRecord["status"];
+  }
 ): Promise<MemoryCommitRecord[]> {
-  const lowered = query.toLowerCase();
+  const terms = input.query.toLowerCase().split(/\s+/).filter(Boolean);
   const files = (await readdir(paths.memoryCommitsDir)).sort();
   const commits = await Promise.all(
     files
@@ -457,10 +462,35 @@ export async function recallMemoryCommits(
       .map(async (file) => readJsonFile<MemoryCommitRecord>(join(paths.memoryCommitsDir, file), memoryCommitSchema))
   );
 
+  const branchStatusById = input.status
+    ? new Map((await listMemoryBranches(paths)).map((branch) => [branch.id, branch.status]))
+    : null;
+
   return commits.filter((commit) => {
+    if (input.challengeId !== undefined && commit.challengeId !== input.challengeId) {
+      return false;
+    }
+
+    if (input.branchId !== undefined && commit.branchId !== input.branchId) {
+      return false;
+    }
+
+    if (input.status !== undefined && branchStatusById?.get(commit.branchId) !== input.status) {
+      return false;
+    }
+
     const haystack = [commit.message, ...commit.facts, ...commit.hypotheses].join(" ").toLowerCase();
-    return haystack.includes(lowered);
+    return terms.every((term) => haystack.includes(term));
   });
+}
+
+export async function listMemoryBranches(paths: RuntimePaths): Promise<MemoryBranchRecord[]> {
+  const files = (await readdir(paths.memoryBranchesDir)).sort();
+  return await Promise.all(
+    files
+      .filter((file) => file.endsWith(".json"))
+      .map(async (file) => readJsonFile<MemoryBranchRecord>(join(paths.memoryBranchesDir, file), memoryBranchSchema))
+  );
 }
 
 export async function ensureDockerImageRecord(
