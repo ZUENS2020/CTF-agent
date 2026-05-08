@@ -2,6 +2,11 @@ import { Command } from "commander";
 import type { CommandContext } from "../cli.js";
 import { createMemoryBranch, createMemoryCommit, createMemoryMerge, recallMemoryCommits } from "../core/runtime.js";
 
+function parseCsvList(value: string | string[] | undefined): string[] {
+  const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
+  return values.flatMap((item) => item.split(",").map((part) => part.trim()).filter(Boolean));
+}
+
 export function registerMemoryCommands(program: Command, context: CommandContext): void {
   const memory = program.command("memory");
 
@@ -29,18 +34,20 @@ export function registerMemoryCommands(program: Command, context: CommandContext
     .requiredOption("--branch <branchId>")
     .requiredOption("--challenge <challengeId>")
     .requiredOption("--message <message>")
-    .requiredOption("--facts <facts>")
-    .requiredOption("--hypotheses <hypotheses>")
+    .requiredOption("--facts <items...>")
+    .requiredOption("--hypotheses <items...>")
+    .option("--artifact-ids <items...>")
+    .option("--evidence-ids <items...>")
     .action(async (options) => {
       context.setCommand("memory commit create");
       const commit = await createMemoryCommit(context.paths, {
         branchId: options.branch,
         challengeId: options.challenge,
         message: options.message,
-        facts: [options.facts],
-        hypotheses: [options.hypotheses],
-        artifactIds: [],
-        evidenceIds: []
+        facts: parseCsvList(options.facts),
+        hypotheses: parseCsvList(options.hypotheses),
+        artifactIds: parseCsvList(options.artifactIds),
+        evidenceIds: parseCsvList(options.evidenceIds)
       });
 
       context.writeSuccess({

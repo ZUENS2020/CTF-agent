@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupRuntimeRoot, makeRuntimeRoot } from "./helpers.js";
 import { runCli } from "../src/cli.js";
@@ -7,6 +9,40 @@ const runtimeRoots: string[] = [];
 afterEach(async () => {
   await Promise.all(runtimeRoots.splice(0).map(cleanupRuntimeRoot));
 });
+
+async function createChallengeAndBranch(runtimeRoot: string) {
+  const challenge = JSON.parse(
+    (
+      await runCli(
+        [
+          "challenge",
+          "init",
+          "--name",
+          "memory challenge",
+          "--category",
+          "reverse",
+          "--description",
+          "memory cli",
+          "--flag-format",
+          "flag{...}"
+        ],
+        {
+          CTFCTL_RUNTIME_ROOT: runtimeRoot
+        }
+      )
+    ).stdout
+  ).data.challenge;
+
+  const branch = JSON.parse(
+    (
+      await runCli(["memory", "branch", "create", "--challenge", challenge.id, "--name", "main"], {
+        CTFCTL_RUNTIME_ROOT: runtimeRoot
+      })
+    ).stdout
+  ).data.branch;
+
+  return { challenge, branch };
+}
 
 describe("memory commands", () => {
   it("creates a branch, commits to it, and recalls by query", async () => {
@@ -78,6 +114,86 @@ describe("memory commands", () => {
     expect(parsed.meta.command).toBe("memory recall");
     expect(parsed.data.matches).toHaveLength(1);
     expect(parsed.data.matches[0].message).toBe("audio spectrogram workflow");
+  });
+
+  it("splits comma-separated facts and commit reference ids", async () => {
+    const runtimeRoot = await makeRuntimeRoot();
+    runtimeRoots.push(runtimeRoot);
+    const { challenge, branch } = await createChallengeAndBranch(runtimeRoot);
+
+    const commitResult = await runCli(
+      [
+        "memory",
+        "commit",
+        "create",
+        "--branch",
+        branch.id,
+        "--challenge",
+        challenge.id,
+        "--message",
+        "comma separated commit",
+        "--facts",
+        "a,b",
+        "--hypotheses",
+        "h1,h2",
+        "--artifact-ids",
+        "art-1,art-2",
+        "--evidence-ids",
+        "ev-1,ev-2"
+      ],
+      {
+        CTFCTL_RUNTIME_ROOT: runtimeRoot
+      }
+    );
+
+    expect(commitResult.exitCode).toBe(0);
+    const commit = JSON.parse(commitResult.stdout).data.commit;
+    expect(commit.facts).toEqual(["a", "b"]);
+    expect(commit.hypotheses).toEqual(["h1", "h2"]);
+
+    const commitJson = JSON.parse(
+      await readFile(join(runtimeRoot, "memory", "commits", `${commit.id}.json`), "utf8")
+    );
+    expect(commitJson.artifactIds).toEqual(["art-1", "art-2"]);
+    expect(commitJson.evidenceIds).toEqual(["ev-1", "ev-2"]);
+  });
+
+  it("saves repeated and multi-token facts and hypotheses", async () => {
+    const runtimeRoot = await makeRuntimeRoot();
+    runtimeRoots.push(runtimeRoot);
+    const { challenge, branch } = await createChallengeAndBranch(runtimeRoot);
+
+    const commitResult = await runCli(
+      [
+        "memory",
+        "commit",
+        "create",
+        "--branch",
+        branch.id,
+        "--challenge",
+        challenge.id,
+        "--message",
+        "repeated and variadic commit",
+        "--facts",
+        "alpha",
+        "beta",
+        "--facts",
+        " gamma, delta ",
+        "--hypotheses",
+        "one",
+        "two",
+        "--hypotheses",
+        "three,four"
+      ],
+      {
+        CTFCTL_RUNTIME_ROOT: runtimeRoot
+      }
+    );
+
+    expect(commitResult.exitCode).toBe(0);
+    const commit = JSON.parse(commitResult.stdout).data.commit;
+    expect(commit.facts).toEqual(["alpha", "beta", "gamma", "delta"]);
+    expect(commit.hypotheses).toEqual(["one", "two", "three", "four"]);
   });
 
   it("merges two branches through the cli", async () => {
