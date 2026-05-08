@@ -288,6 +288,135 @@ describe("memory commands", () => {
     expect(matches[0].message).toBe("status beacon on active branch");
   });
 
+
+  it("splits comma-separated and repeated commit fields", async () => {
+    const runtimeRoot = await makeRuntimeRoot();
+    runtimeRoots.push(runtimeRoot);
+    const challenge = await initChallenge(runtimeRoot, "list input memory");
+    const branch = await createBranch(runtimeRoot, challenge.id, "main");
+
+    const commitResult = await runCli(
+      [
+        "memory",
+        "commit",
+        "create",
+        "--branch",
+        branch.id,
+        "--challenge",
+        challenge.id,
+        "--message",
+        "list input commit",
+        "--facts",
+        "alpha,beta",
+        "--facts",
+        "gamma",
+        "delta, epsilon",
+        "--hypotheses",
+        "one",
+        "two,three",
+        "--artifact-ids",
+        "art-1,art-2",
+        "--evidence-ids",
+        "ev-1",
+        "ev-2,ev-3"
+      ],
+      runtimeEnv(runtimeRoot)
+    );
+
+    expect(commitResult.exitCode).toBe(0);
+    const commit = JSON.parse(commitResult.stdout).data.commit;
+    expect(commit.facts).toEqual(["alpha", "beta", "gamma", "delta", "epsilon"]);
+    expect(commit.hypotheses).toEqual(["one", "two", "three"]);
+
+    const commitJson = JSON.parse(await readFile(join(runtimeRoot, "memory", "commits", `${commit.id}.json`), "utf8"));
+    expect(commitJson.artifactIds).toEqual(["art-1", "art-2"]);
+    expect(commitJson.evidenceIds).toEqual(["ev-1", "ev-2", "ev-3"]);
+  });
+
+  it("lists, shows, and kills memory branches", async () => {
+    const runtimeRoot = await makeRuntimeRoot();
+    runtimeRoots.push(runtimeRoot);
+    const firstChallenge = await initChallenge(runtimeRoot, "branch management one");
+    const secondChallenge = await initChallenge(runtimeRoot, "branch management two");
+    const activeBranch = await createBranch(runtimeRoot, firstChallenge.id, "active");
+    const deadBranch = await createBranch(runtimeRoot, firstChallenge.id, "dead");
+    await createBranch(runtimeRoot, secondChallenge.id, "other");
+    const commit = await createCommit(runtimeRoot, {
+      branchId: activeBranch.id,
+      challengeId: firstChallenge.id,
+      message: "branch list commit"
+    });
+
+    const killResult = await runCli(["memory", "branch", "kill", "--branch", deadBranch.id], runtimeEnv(runtimeRoot));
+    expect(killResult.exitCode).toBe(0);
+    expect(JSON.parse(killResult.stdout).data.branch.status).toBe("dead");
+
+    const listResult = await runCli(
+      ["memory", "branch", "list", "--challenge", firstChallenge.id, "--status", "active"],
+      runtimeEnv(runtimeRoot)
+    );
+    expect(listResult.exitCode).toBe(0);
+    const branches = JSON.parse(listResult.stdout).data.branches;
+    expect(branches.map((branch: { id: string }) => branch.id)).toEqual([activeBranch.id]);
+
+    const showResult = await runCli(["memory", "branch", "show", "--branch", activeBranch.id], runtimeEnv(runtimeRoot));
+    expect(showResult.exitCode).toBe(0);
+    const shown = JSON.parse(showResult.stdout).data;
+    expect(shown.branch.id).toBe(activeBranch.id);
+    expect(shown.commits.map((shownCommit: { id: string }) => shownCommit.id)).toEqual([commit.id]);
+  });
+
+  it("lists memory commits and merges", async () => {
+    const runtimeRoot = await makeRuntimeRoot();
+    runtimeRoots.push(runtimeRoot);
+    const challenge = await initChallenge(runtimeRoot, "list commits and merges");
+    const mainBranch = await createBranch(runtimeRoot, challenge.id, "main");
+    const altBranch = await createBranch(runtimeRoot, challenge.id, "alt");
+    const firstCommit = await createCommit(runtimeRoot, {
+      branchId: mainBranch.id,
+      challengeId: challenge.id,
+      message: "first listed commit"
+    });
+    const secondCommit = await createCommit(runtimeRoot, {
+      branchId: mainBranch.id,
+      challengeId: challenge.id,
+      message: "second listed commit"
+    });
+
+    const commitListResult = await runCli(["memory", "commit", "list", "--branch", mainBranch.id], runtimeEnv(runtimeRoot));
+    expect(commitListResult.exitCode).toBe(0);
+    expect(JSON.parse(commitListResult.stdout).data.commits.map((commit: { id: string }) => commit.id)).toEqual([
+      firstCommit.id,
+      secondCommit.id
+    ]);
+
+    const mergeResult = await runCli(
+      [
+        "memory",
+        "merge",
+        "--challenge",
+        challenge.id,
+        "--source-branch",
+        altBranch.id,
+        "--target-branch",
+        mainBranch.id,
+        "--result-commit",
+        secondCommit.id,
+        "--summary",
+        "listable merge"
+      ],
+      runtimeEnv(runtimeRoot)
+    );
+    expect(mergeResult.exitCode).toBe(0);
+    const merge = JSON.parse(mergeResult.stdout).data.merge;
+
+    const mergeListResult = await runCli(["memory", "merge", "list", "--challenge", challenge.id], runtimeEnv(runtimeRoot));
+    expect(mergeListResult.exitCode).toBe(0);
+    expect(JSON.parse(mergeListResult.stdout).data.merges.map((listedMerge: { id: string }) => listedMerge.id)).toEqual([
+      merge.id
+    ]);
+  });
+
   it("merges two branches through the cli", async () => {
     const runtimeRoot = await makeRuntimeRoot();
     runtimeRoots.push(runtimeRoot);
