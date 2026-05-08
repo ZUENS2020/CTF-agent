@@ -1,10 +1,9 @@
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupRuntimeRoot, makeRuntimeRoot } from "./helpers.js";
 import { resolveConfig } from "../src/core/config.js";
 import {
-  createChallenge,
-  createWorkspace,
   ensureRuntime,
   getWorkspace,
   listDockerImageRecords,
@@ -22,22 +21,54 @@ describe("runtime schema validation", () => {
     const runtimeRoot = await makeRuntimeRoot();
     runtimeRoots.push(runtimeRoot);
     const paths = await ensureRuntime(await resolveConfig({ CTFCTL_RUNTIME_ROOT: runtimeRoot }));
-    const challenge = await createChallenge(paths, {
-      name: "schema challenge",
-      category: "misc",
-      description: "schema test",
-      flagFormat: "flag{...}"
-    });
-    const workspace = await createWorkspace(paths, challenge.id);
 
-    await writeJsonFile(join(paths.workspacesDir, workspace.id, "workspace.json"), {
-      ...workspace,
-      backend: "local-shell"
+    const workspaceId = "ws-schema-test";
+    const workspaceDir = join(paths.workspacesDir, workspaceId);
+    await mkdir(workspaceDir, { recursive: true });
+
+    await writeJsonFile(join(workspaceDir, "workspace.json"), {
+      id: workspaceId,
+      challengeId: "ch-test",
+      backend: "local-shell",
+      status: "ready",
+      path: workspaceDir,
+      containerImage: "alpine:3.20",
+      containerWorkdir: "/workspace",
+      containerName: `ctfctl-${workspaceId}`,
+      containerId: null,
+      createdAt: new Date().toISOString(),
+      destroyedAt: null
     });
 
-    await expect(getWorkspace(paths, workspace.id)).rejects.toMatchObject({
+    await expect(getWorkspace(paths, workspaceId)).rejects.toMatchObject({
       code: "INVALID_RUNTIME_RECORD"
     });
+  });
+
+  it("accepts workspace records that lack containerId and destroyedAt for backward compatibility", async () => {
+    const runtimeRoot = await makeRuntimeRoot();
+    runtimeRoots.push(runtimeRoot);
+    const paths = await ensureRuntime(await resolveConfig({ CTFCTL_RUNTIME_ROOT: runtimeRoot }));
+
+    const workspaceId = "ws-legacy";
+    const workspaceDir = join(paths.workspacesDir, workspaceId);
+    await mkdir(workspaceDir, { recursive: true });
+
+    await writeJsonFile(join(workspaceDir, "workspace.json"), {
+      id: workspaceId,
+      challengeId: "ch-test",
+      backend: "docker",
+      status: "ready",
+      path: workspaceDir,
+      containerImage: "alpine:3.20",
+      containerWorkdir: "/workspace",
+      containerName: `ctfctl-${workspaceId}`,
+      createdAt: new Date().toISOString()
+    });
+
+    const workspace = await getWorkspace(paths, workspaceId);
+    expect(workspace.containerId).toBeNull();
+    expect(workspace.destroyedAt).toBeNull();
   });
 
   it("rejects malformed docker image ledgers", async () => {
