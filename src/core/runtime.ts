@@ -3,6 +3,13 @@ import { createHash } from "node:crypto";
 import { basename, join } from "node:path";
 import { z, type ZodType } from "zod";
 import type { RuntimeConfig } from "./config.js";
+import {
+  createContainer,
+  isContainerRunning,
+  removeContainer,
+  startContainer,
+  stopContainer
+} from "./docker.js";
 import { CliError } from "./errors.js";
 import type {
   ArtifactRecord,
@@ -72,6 +79,8 @@ export async function ensureRuntime(config: RuntimeConfig): Promise<RuntimePaths
     mkdir(paths.skillEvaluationsDir, { recursive: true }),
     mkdir(paths.skillProposalsDir, { recursive: true })
   ]);
+
+  await reconcileWorkspaces(paths);
 
   return paths;
 }
@@ -178,21 +187,40 @@ export async function createWorkspace(paths: RuntimePaths, challengeId: string):
   await getChallenge(paths, challengeId);
   const workspaceId = makeId("ws");
   const workspaceDir = join(paths.workspacesDir, workspaceId);
+  const fsDir = join(workspaceDir, "fs");
+  const containerName = `ctfctl-${workspaceId}`;
+
+  await mkdir(workspaceDir, { recursive: true });
+  await mkdir(fsDir, { recursive: true });
+
+  const containerId = await createContainer({
+    name: containerName,
+    image: paths.config.dockerImage,
+    workdir: paths.config.dockerWorkdir,
+    hostMountPath: fsDir,
+    capAdd: ["NET_RAW", "NET_ADMIN"]
+  });
+
   const workspace: WorkspaceRecord = {
     id: workspaceId,
     challengeId,
     backend: "docker",
     status: "ready",
-    path: join(workspaceDir, "fs"),
+    path: fsDir,
     containerImage: paths.config.dockerImage,
     containerWorkdir: paths.config.dockerWorkdir,
-    containerName: `ctfctl-${workspaceId}`,
-    createdAt: new Date().toISOString()
+    containerName,
+    containerId,
+    createdAt: new Date().toISOString(),
+    destroyedAt: null
   };
 
-  await mkdir(workspaceDir, { recursive: true });
-  await mkdir(workspace.path, { recursive: true });
-  await writeJsonFile(join(workspaceDir, "workspace.json"), workspace, workspaceSchema);
+  try {
+    await writeJsonFile(join(workspaceDir, "workspace.json"), workspace, workspaceSchema);
+  } catch (error) {
+    await removeContainer(containerName).catch(() => undefined);
+    throw error;
+  }
   return workspace;
 }
 
@@ -207,12 +235,124 @@ export async function getWorkspace(paths: RuntimePaths, workspaceId: string): Pr
 
 export async function destroyWorkspace(paths: RuntimePaths, workspaceId: string): Promise<WorkspaceRecord> {
   const workspace = await getWorkspace(paths, workspaceId);
+  if (workspace.status !== "destroyed") {
+    await removeContainer(workspace.containerName);
+  }
   const destroyed: WorkspaceRecord = {
     ...workspace,
-    status: "destroyed"
+    status: "destroyed",
+    destroyedAt: workspace.destroyedAt ?? new Date().toISOString()
   };
   await writeJsonFile(join(paths.workspacesDir, workspaceId, "workspace.json"), destroyed, workspaceSchema);
   return destroyed;
+}
+
+export async function stopWorkspace(paths: RuntimePaths, workspaceId: string): Promise<WorkspaceRecord> {
+  const workspace = await getWorkspace(paths, workspaceId);
+  if (workspace.status === "destroyed") {
+    throw new CliError(`Workspace already destroyed: ${workspaceId}`, "WORKSPACE_DESTROYED", 1);
+  }
+  if (workspace.status !== "stopped") {
+    await stopContainer(workspace.containerName);
+  }
+  const stopped: WorkspaceRecord = {
+    ...workspace,
+    status: "stopped"
+  };
+  await writeJsonFile(join(paths.workspacesDir, workspaceId, "workspace.json"), stopped, workspaceSchema);
+  return stopped;
+}
+
+export async function startWorkspace(paths: RuntimePaths, workspaceId: string): Promise<WorkspaceRecord> {
+  const workspace = await getWorkspace(paths, workspaceId);
+  if (workspace.status === "destroyed") {
+    throw new CliError(`Workspace already destroyed: ${workspaceId}`, "WORKSPACE_DESTROYED", 1);
+  }
+  await startContainer(workspace.containerName);
+  const started: WorkspaceRecord = {
+    ...workspace,
+    status: "ready"
+  };
+  await writeJsonFile(join(paths.workspacesDir, workspaceId, "workspace.json"), started, workspaceSchema);
+  return started;
+}
+
+export async function listWorkspaces(paths: RuntimePaths): Promise<WorkspaceRecord[]> {
+  let entries: string[];
+  try {
+    entries = await readdir(paths.workspacesDir);
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return [];
+    }
+    throw error;
+  }
+
+  const workspaces: WorkspaceRecord[] = [];
+  for (const id of entries.sort()) {
+    const workspacePath = join(paths.workspacesDir, id, "workspace.json");
+    try {
+      workspaces.push(await readJsonFile<WorkspaceRecord>(workspacePath, workspaceSchema));
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        continue;
+      }
+      throw error;
+    }
+  }
+  return workspaces;
+}
+
+export async function reconcileWorkspaces(paths: RuntimePaths): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await readdir(paths.workspacesDir);
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return;
+    }
+    throw error;
+  }
+
+  for (const id of entries) {
+    const workspacePath = join(paths.workspacesDir, id, "workspace.json");
+    let workspace: WorkspaceRecord;
+    try {
+      workspace = await readJsonFile<WorkspaceRecord>(workspacePath, workspaceSchema);
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        continue;
+      }
+      if (error instanceof CliError && error.code === "INVALID_RUNTIME_RECORD") {
+        continue;
+      }
+      continue;
+    }
+
+    if (workspace.status !== "ready") {
+      continue;
+    }
+
+    let running: boolean;
+    try {
+      running = await isContainerRunning(workspace.containerName);
+    } catch {
+      // Docker may be unavailable on startup. Leave records untouched.
+      return;
+    }
+
+    if (!running) {
+      const stopped: WorkspaceRecord = {
+        ...workspace,
+        status: "stopped"
+      };
+      try {
+        await writeJsonFile(workspacePath, stopped, workspaceSchema);
+      } catch {
+        // Best-effort reconciliation; do not fail startup.
+      }
+    }
+  }
 }
 
 export async function appendEvidence(paths: RuntimePaths, entry: Omit<EvidenceEntry, "id" | "createdAt">): Promise<EvidenceEntry> {

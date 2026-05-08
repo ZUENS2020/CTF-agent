@@ -17,12 +17,14 @@ export const workspaceSchema = z.object({
   id: z.string(),
   challengeId: z.string(),
   backend: z.literal("docker"),
-  status: z.enum(["ready", "destroyed"]),
+  status: z.enum(["creating", "ready", "stopped", "destroyed"]),
   path: z.string(),
   containerImage: z.string(),
   containerWorkdir: z.string(),
   containerName: z.string(),
-  createdAt: isoTimestampSchema
+  containerId: z.string().nullable().default(null),
+  createdAt: isoTimestampSchema,
+  destroyedAt: isoTimestampSchema.nullable().default(null)
 });
 
 export const artifactSchema = z.object({
